@@ -1,26 +1,34 @@
-{-# LANGUAGE TemplateHaskell, GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE TemplateHaskell, GeneralizedNewtypeDeriving, QuasiQuotes #-}
 module Day7 where
 
 -- Day 7
 import Text.Parsec
+
 import qualified Data.HashMap.Strict as H
 import Data.Hashable (Hashable)
 
+import Data.Word
 import Data.Bits
-import Data.Maybe (fromJust)
-import Data.Function.Memoize (deriveMemoizable, memoFix)
+import Data.Function.Memoize (deriveMemoizable, memoFix, Memoizable, memoize, memoizeFinite)
+
+import Data.String.Here
+import Test.Hspec
+
+import Data.Foldable (forM_)
 
 -- Data definitions
 newtype Gate = Gate String deriving (Show, Eq, Hashable)
 deriveMemoizable ''Gate
 
-data Expr = Lit Int
+data Expr = Lit Word16
           | GateExpr Gate
           | And Expr Expr
           | Not Expr
           | Rshift Expr Expr
           | Lshift Expr Expr
           | Or Expr Expr deriving (Show)
+
+instance Memoizable Word16 where memoize = memoizeFinite
 
 deriveMemoizable ''Expr
 data Line = Line Expr Gate deriving (Show)
@@ -46,39 +54,77 @@ parseLshift = parseBinop "LSHIFT" Lshift
 parseNot = Not <$> (string "NOT " *> parseGateOrLiteral)
 
 -- Line (i.e an expression -> a gate)
-parseLine = do
-  expr <- choice (map try [parseNot, parseAnd, parseOr, parseRshift, parseLshift, parseGateOrLiteral])
-  _ <- string " -> "
-  gate <- parseGate
-
-  return $ Line expr gate
+parseLine = Line
+  <$> choice (map try [parseNot, parseAnd, parseOr, parseRshift, parseLshift, parseGateOrLiteral])
+  <* string " -> "
+  <*> parseGate
 
 -- All lines
 parseLines = parseLine `sepBy` (string "\n")
 
-day7Input = do
-  input <- readFile "inputs/day7"
-  return $ let (Right res) = parse parseLines "BLORK" input in res
+day7Content :: IO String
+day7Content = readFile "inputs/day7"
 
-eval :: H.HashMap Gate Expr -> Expr -> Int
-eval commands v = go' v
+day7Parse :: String -> H.HashMap Gate Expr
+day7Parse input = let (Right res) = parse parseLines "BLORK" input
+                  in H.fromList (map (\(Line e name) -> (name, e)) res)
+
+day7Input :: IO (H.HashMap Gate Expr)
+day7Input = day7Parse <$> day7Content
+
+evalExpr :: H.HashMap Gate Expr -> Expr -> Word16
+evalExpr commands v = go' v
   where
     go' = memoFix go
 
     go _ (Lit i) = i
-    go go'' (GateExpr gate) = go'' (fromJust (H.lookup gate commands))
+    go go'' (GateExpr gate) = go'' (commands H.! gate)
     go go'' (And expr0 expr1) = (go'' expr0) .&. (go'' expr1)
     go go'' (Or expr0 expr1) = (go'' expr0)  .|. (go'' expr1)
-    go go'' (Rshift expr0 expr1) = (go'' expr0) `shiftR` (go'' expr1)
-    go go'' (Lshift expr0 expr1) = (go'' expr0) `shiftL` (go'' expr1)
+    go go'' (Rshift expr0 expr1) = (go'' expr0) `shiftR` (fromIntegral (go'' expr1))
+    go go'' (Lshift expr0 expr1) = (go'' expr0) `shiftL` (fromIntegral (go'' expr1))
     go go'' (Not expr) = complement (go'' expr)
 
-gateA = (GateExpr . Gate) "a"
+evalGate :: H.HashMap Gate Expr -> Gate -> Word16
+evalGate commands gate = evalExpr commands (GateExpr gate)
 
-day7 lines = let commands = H.fromList (map (\(Line e name) -> (name, e)) lines)
-             in eval commands gateA
+day7 commands = evalGate commands (Gate "a")
 
-day7' lines = let commands = H.fromList (map (\(Line e name) -> (name, e)) lines)
-                  retb = eval commands gateA
-                  commands' = H.insert (Gate "b") (Lit retb) commands
-              in eval commands' gateA
+day7' commands = let retb = day7 commands
+                     commands' = H.insert (Gate "b") (Lit retb) commands
+              in evalGate commands' (Gate "a")
+
+testCase = [here|
+123 -> x
+456 -> y
+x AND y -> d
+x OR y -> e
+x LSHIFT 2 -> f
+y RSHIFT 2 -> g
+NOT x -> h
+NOT y -> i|]
+
+testResults = [
+  ("d", 72),
+  ("e", 507),
+  ("f", 492),
+  ("g", 114),
+  ("h", 65412),
+  ("i", 65079),
+  ("x", 123),
+  ("y", 456)
+  ]
+
+day7Tests = hspec $ do
+  describe "proposed tests" $ do
+      let e gate = evalGate (day7Parse testCase) (Gate gate)
+
+      forM_ testResults $ \(s, res) -> do
+        it ("works for " ++ s) $ do
+          e s `shouldBe` res
+
+  describe "final result" $ do
+    it "with first case" $ do
+      (day7 <$> day7Input) `shouldReturn` 956
+    it "with second case" $ do
+      (day7' <$> day7Input) `shouldReturn` 40149
