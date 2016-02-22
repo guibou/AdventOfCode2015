@@ -18,7 +18,6 @@ import Data.Foldable (forM_)
 
 -- Data definitions
 newtype Gate = Gate String deriving (Show, Eq, Hashable)
-deriveMemoizable ''Gate
 
 data Expr = Lit Word16
           | GateExpr Gate
@@ -26,12 +25,15 @@ data Expr = Lit Word16
           | Not Expr
           | Rshift Expr Expr
           | Lshift Expr Expr
-          | Or Expr Expr deriving (Show)
+          | Or Expr Expr deriving (Show, Eq)
 
+-- For memoization
+deriveMemoizable ''Gate
 instance Memoizable Word16 where memoize = memoizeFinite
-
 deriveMemoizable ''Expr
-data Line = Line Expr Gate deriving (Show)
+
+-- a Type alias
+type Program = H.HashMap Gate Expr
 
 -- utils
 
@@ -54,10 +56,11 @@ parseLshift = parseBinop "LSHIFT" Lshift
 parseNot = Not <$> (string "NOT " *> parseGateOrLiteral)
 
 -- Line (i.e an expression -> a gate)
-parseLine = Line
-  <$> choice (map try [parseNot, parseAnd, parseOr, parseRshift, parseLshift, parseGateOrLiteral])
-  <* string " -> "
-  <*> parseGate
+parseLine = do
+  expr <- choice (map try [parseNot, parseAnd, parseOr, parseRshift, parseLshift, parseGateOrLiteral])
+  _ <- string " -> "
+  gate <- parseGate
+  return $ (gate, expr)
 
 -- All lines
 parseLines = parseLine `sepBy` (string "\n")
@@ -65,14 +68,14 @@ parseLines = parseLine `sepBy` (string "\n")
 day7Content :: IO String
 day7Content = readFile "inputs/day7"
 
-day7Parse :: String -> H.HashMap Gate Expr
+day7Parse :: String -> Program
 day7Parse input = let (Right res) = parse parseLines "BLORK" input
-                  in H.fromList (map (\(Line e name) -> (name, e)) res)
+                  in H.fromList res
 
-day7Input :: IO (H.HashMap Gate Expr)
+day7Input :: IO Program
 day7Input = day7Parse <$> day7Content
 
-evalExpr :: H.HashMap Gate Expr -> Expr -> Word16
+evalExpr :: Program -> Expr -> Word16
 evalExpr commands v = go' v
   where
     go' = memoFix go
@@ -85,7 +88,7 @@ evalExpr commands v = go' v
     go go'' (Lshift expr0 expr1) = (go'' expr0) `shiftL` (fromIntegral (go'' expr1))
     go go'' (Not expr) = complement (go'' expr)
 
-evalGate :: H.HashMap Gate Expr -> Gate -> Word16
+evalGate :: Program -> Gate -> Word16
 evalGate commands gate = evalExpr commands (GateExpr gate)
 
 day7 commands = evalGate commands (Gate "a")
@@ -104,6 +107,19 @@ y RSHIFT 2 -> g
 NOT x -> h
 NOT y -> i|]
 
+gateE = GateExpr . Gate
+
+testCaseReaded = H.fromList [
+  (Gate "x", Lit 123),
+  (Gate "y", Lit 456),
+  (Gate "d", And (gateE ("x")) (gateE "y")),
+  (Gate "e", Or (gateE "x") (gateE "y")),
+  (Gate "f", Lshift (gateE "x") (Lit 2)),
+  (Gate "g", Rshift (gateE "y") (Lit 2)),
+  (Gate "h", Not (gateE "x")),
+  (Gate "i", Not (gateE "y"))
+  ]
+
 testResults = [
   ("d", 72),
   ("e", 507),
@@ -118,6 +134,9 @@ testResults = [
 day7Tests = hspec $ do
   describe "proposed tests" $ do
       let e gate = evalGate (day7Parse testCase) (Gate gate)
+
+      it "parses" $ do
+        (day7Parse testCase) `shouldBe` testCaseReaded
 
       forM_ testResults $ \(s, res) -> do
         it ("works for " ++ s) $ do
