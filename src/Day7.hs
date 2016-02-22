@@ -63,14 +63,14 @@ parseLine = do
   return $ (gate, expr)
 
 -- All lines
-parseLines = parseLine `sepBy` (string "\n")
+parseProgram = H.fromList <$> parseLine `sepBy` (string "\n")
 
 day7Content :: IO String
 day7Content = readFile "inputs/day7"
 
 day7Parse :: String -> Program
-day7Parse input = let (Right res) = parse parseLines "BLORK" input
-                  in H.fromList res
+day7Parse input = let (Right res) = parse parseProgram "BLORK" input
+                  in res
 
 day7Input :: IO Program
 day7Input = day7Parse <$> day7Content
